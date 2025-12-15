@@ -1,0 +1,14 @@
+---
+
+# Include this file to override settings for the mmc5603 sensor to instead
+# support the hmc5883l magnetometer sensor
+
+logger:
+  logs:
+    hmc5883l: INFO
+
+sensor:
+  - id: !extend magnetometer_id
+    platform: hmc5883l
+    address: 0x1E
+    oversampling: 1x

@@ -1,0 +1,296 @@
+---
+
+# This is the common code to measure gas or water meters.   You don't need to
+# include this directly.  Include either:
+#   - gas-meter.yaml
+#   - water-meter.yaml
+#
+# This uses a triple-axis magnetometer to read your water or gas meter.
+# This file is set up to use the mmc5603 sensor.
+# I recommend this one: https://www.adafruit.com/product/5579
+
+substitutions:
+  # water or gas
+  device_class: 
+
+  # mdi:water or mdi:meter-gas
+  device_icon:  
+
+  # For water one of: CCF, ft³, gal, L, m³
+  # For gas one of: CCF, ft³, m³
+  # For better accuracy avoid using large units like CCF.
+  # You can always change the unit later in Home Assistant.
+  volume_unit:
+
+  # GPIO pins
+  i2c_scl:
+  i2c_sda:
+
+  # How frequently to sample the magnetometer
+  magnetometer_update_interval_ms: 16
+
+  # If you need very frequent magnetometer samplings, reducing this can help.
+  # The default loop interval is 16ms. Setting it to 0 can make updates faster
+  # but the ESP32 will run hotter.
+  loop_interval_ms: 16
+
+  # How frequently to update half_rotations_flow to HA
+  flow_update_interval_seconds: '10'
+
+  # How much water/gas is consumed in one half-rotation of the meter crank/shaft
+  volume_per_half_rotation_initial_value: 
+
+  # The minimum change in a field reading (µT) to make it significant.
+  # Ideally your meter shows a 40µT difference between peaks and troughs.
+  magnetic_field_change_threshold: 3
+
+  # true - exposes the x, y, z magnetometer readings in HA for visualization.
+  # Small fluctuations are suppressed using magnetic_field_change_threshold.
+  enable_magnetic_field_strength_sensors: 'true'
+
+  # true - exposes the meter counter in HA
+  enable_half_rotations_total_sensor: 'true'
+
+  # true - exposes a marker sensor when a peak or trough is detected.
+  # The meter counter increments on the peak event.  This is useful for
+  # visualization to indicate and verify half-rotation events.
+  enable_half_rotation_marker_sensor: 'true'
+
+  # Just a trick to invert substitutions
+  invert_true: 'false'
+  invert_false: 'true'
+
+logger:
+  level: INFO
+  logs:
+    mmc5603: INFO
+
+esphome:
+  on_boot:
+    then:
+      - lambda: App.set_loop_interval(${loop_interval_ms});
+
+api:
+  services:
+    # Based on https://esphome.io/components/sensor/pulse_meter/#resetting-the-total-pulse-count
+    # Useful if you would like the total sensor in HA to match what you see on
+    # your meter
+    - service: set_total
+      variables:
+        new_total: float
+      then:
+        - globals.set:
+            id: half_rotations_total
+            value: !lambda 'return new_total / id(volume_per_half_rotation).state;'
+
+globals:
+  - id: half_rotations_total
+    type: long
+    restore_value: true
+    initial_value: '0'
+  - id: half_rotation_marker
+    type: long
+    restore_value: true
+    initial_value: '0'
+  - id: half_rotations_flow
+    type: long
+    restore_value: false
+    initial_value: '0'
+  - id: last_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: prev_filtered_value
+    type: float
+    initial_value: '0.0'
+    restore_value: false
+  - id: prev_is_slope_positive
+    type: bool
+    initial_value: 'true'
+
+
+number:
+  - platform: template
+    id: volume_per_half_rotation
+    name: Volume per half rotation
+    entity_category: config
+    mode: box
+    min_value: 0
+    max_value: 9999999
+    step: 0.000000001
+    initial_value: ${volume_per_half_rotation_initial_value}
+    update_interval: never
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: ${volume_unit}
+
+
+select:
+  - platform: template
+    id: axis
+    name: Axis
+    entity_category: config
+    options:
+      - x
+      - y
+      - z
+      - None
+    initial_option: None
+    update_interval: never
+    restore_value: true
+    optimistic: true
+
+i2c:
+  - id: i2c_bus
+    scl: ${i2c_scl}
+    sda: ${i2c_sda}
+    frequency: 50kHz
+    scan: false
+
+switch:
+  # LED flashes faster/slower as magnet rotates on meter
+  - platform: gpio
+    id: led
+    pin:
+      number: ${gpio_led}
+      inverted: true
+
+sensor:
+  # Holds the magnetic field strength value of x, y, or z depending on the axis
+  # selected.
+  - platform: template
+    id: axis_value
+    internal: true
+    on_value:
+      then:
+        - lambda: |-
+            // Detects rotation extrema by low-pass filtering the magnetometer signal
+            // and monitoring slope sign changes. Each peak corresponds to one
+            // half-rotation of the meters crank/shaft and is used to increment a counter.
+            float value = x;
+            float filtered_value;
+            float derivative = 0.0;
+            float lpf_alpha = 0.4;
+
+            // Low-Pass Filter
+            filtered_value = lpf_alpha * value + (1.0 - lpf_alpha) * id(prev_filtered_value);
+
+            // Derivative
+            derivative = filtered_value - id(prev_filtered_value);
+            id(prev_filtered_value) = filtered_value;
+            
+            // Check for transition from Positive to Negative slope (hit a peak)
+            bool is_slope_positive = derivative > 0.0;
+            if (id(prev_is_slope_positive) && !is_slope_positive) {
+              // This is a peak
+              ESP_LOGI("counter", "Peak. value=%.2f f=%.2f d=%.2f", value, filtered_value, derivative);
+              id(half_rotations_total) += 1;
+              id(half_rotations_flow) += 1;
+              id(half_rotation_marker) = value;
+              id(led).turn_on();
+            } else if (!id(prev_is_slope_positive) && is_slope_positive) {
+              // This is a trough
+              ESP_LOGI("counter", "Trough. value=%.2f f=%.2f d=%.2f", value, filtered_value, derivative);
+              id(half_rotation_marker) = value;
+              id(led).turn_off();
+            }
+            id(prev_is_slope_positive) = is_slope_positive;
+    filters:
+      - delta: ${magnetic_field_change_threshold}
+
+  # https://esphome.io/components/sensor/mmc5603/
+  - platform: mmc5603
+    id: magnetometer_id
+    i2c_id: i2c_bus
+    address: 0x30
+    field_strength_x:
+      id: magnetometer_axis_x
+      name: Magnetic Field Strength X
+      internal: ${invert_${enable_magnetic_field_strength_sensors}}
+      entity_category: diagnostic
+      on_raw_value:
+        then:
+          - lambda: |-
+              if (id(axis).state == "x") id(axis_value).publish_state(x);
+      filters:
+        - delta: ${magnetic_field_change_threshold}
+    field_strength_y:
+      id: magnetometer_axis_y
+      name: Magnetic Field Strength Y
+      internal: ${invert_${enable_magnetic_field_strength_sensors}}
+      entity_category: diagnostic
+      on_raw_value:
+        then:
+          - lambda: |-
+              if (id(axis).state == "y") id(axis_value).publish_state(x);
+      filters:
+        - delta: ${magnetic_field_change_threshold}
+    field_strength_z:
+      id: magnetometer_axis_z
+      name: Magnetic Field Strength Z
+      internal: ${invert_${enable_magnetic_field_strength_sensors}}
+      entity_category: diagnostic
+      on_raw_value:
+        then:
+          - lambda: |-
+              if (id(axis).state == "z") id(axis_value).publish_state(x);
+      filters:
+        - delta: ${magnetic_field_change_threshold}
+    update_interval: ${magnetometer_update_interval_ms}ms
+
+  - platform: template
+    id: sensor_half_rotations_total
+    name: Half rotations total
+    lambda: return id(half_rotations_total);
+    update_interval: 1s
+    internal: ${invert_${enable_half_rotations_total_sensor}}
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: 'total_increasing'
+    icon: 'mdi:counter'
+    filters:
+      - delta: 1
+
+  - platform: template
+    id: sensor_half_rotation_marker
+    name: "Half Rotation Marker"
+    lambda: return id(half_rotation_marker);
+    update_interval: 1s
+    internal: ${invert_${enable_half_rotation_marker_sensor}}
+    entity_category: diagnostic
+    unit_of_measurement: "µT"
+    accuracy_decimals: 1
+    filters:
+      - delta: ${magnetic_field_change_threshold}
+    
+
+  - platform: template
+    id: sensor_total
+    name: Total
+    lambda: return id(half_rotations_total) * id(volume_per_half_rotation).state;
+    update_interval: 10s
+    accuracy_decimals: 2
+    device_class: ${device_class}
+    icon: ${device_icon}
+    state_class: total_increasing
+    unit_of_measurement: ${volume_unit}
+    filters:
+      - or:
+          - throttle: 60s
+          - delta: 0
+
+  - platform: template
+    id: sensor_flow
+    name: Flow
+    lambda: |-
+      float flow = id(half_rotations_flow) * id(volume_per_half_rotation).state * 60.0 / ${flow_update_interval_seconds};
+      id(half_rotations_flow) = 0;
+      return flow;
+    update_interval: ${flow_update_interval_seconds}s
+    accuracy_decimals: 2
+    state_class: measurement
+    unit_of_measurement: ${volume_unit}/min
+    filters:
+      - or:
+          - throttle: 60s
+          - delta: 0

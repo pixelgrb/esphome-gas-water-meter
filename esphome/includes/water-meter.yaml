@@ -1,0 +1,17 @@
+---
+
+# Include this to measure a water meter
+
+substitutions:
+  # For water one of: CCF, ft³, gal, L, m³
+  # For better accuracy avoid using large units like CCF and m³.
+  # You can always change the unit later in Home Assistant.
+  volume_unit: 'gal'
+  flow_update_interval_seconds: '10'
+
+packages:
+  water_meter: !include
+    file: magnetometer.yaml
+    vars:
+      device_class: 'water'
+      device_icon: 'mdi:water'

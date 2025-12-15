@@ -1,0 +1,4 @@
+secrets.yaml
+**/secrets.yaml
+*.log
+*.DS_Store

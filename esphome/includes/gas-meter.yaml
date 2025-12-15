@@ -1,0 +1,18 @@
+---
+
+# Include this to measure a gas meter
+
+substitutions:
+  volume_unit: 'ft³'
+  # The most common value in US seems to be 0.125 ft³
+  # If you modify the volume_unit, modify this too.
+  volume_per_half_rotation_initial_value: '0.125'
+  flow_update_interval_seconds: '30'
+
+packages:
+  gas_meter: !include
+    file: magnetometer.yaml
+    vars:
+      device_class: 'gas'
+      device_icon: 'mdi:meter-gas'
+
