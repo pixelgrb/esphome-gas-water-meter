@@ -40,12 +40,8 @@ substitutions:
   # How much water/gas is consumed in one half-rotation of the meter crank/shaft
   volume_per_half_rotation_initial_value: 
 
-  # The minimum change in a field reading (µT) to make it significant.
-  # Ideally your meter shows a 40µT difference between peaks and troughs.
-  magnetic_field_change_threshold: 3
-
   # true - exposes the x, y, z magnetometer readings in HA for visualization.
-  # Small fluctuations are suppressed using magnetic_field_change_threshold.
+  # Small fluctuations are suppressed by field_change_threshold
   enable_magnetic_field_strength_sensors: 'true'
 
   # true - exposes the meter counter in HA
@@ -123,8 +119,38 @@ number:
     restore_value: true
     optimistic: true
     unit_of_measurement: ${volume_unit}
-
-
+  # This is the minimum magnetic field change (µT) to be meaningful.
+  # This suppresses noise and reduces updates of the fields to HA.
+  - platform: template
+    id: field_change_threshold
+    name: Field Change Threshold
+    entity_category: config
+    mode: box
+    min_value: 0.1
+    max_value: 9999
+    step: 0.1
+    initial_value: 3
+    update_interval: never
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: µT
+  # This is the minimum magnetic field change needed between peaks and troughs,
+  # which are used to count the meter.  This helps to reduce false positives
+  # caused by smaller vibrations etc.  Setting too high though can skip counting
+  # if the meter drifts with temperature changes.
+  - platform: template
+    id: peak_trough_delta_threshold
+    name: Event Delta Threshold
+    entity_category: config
+    mode: box
+    min_value: 0
+    max_value: 9999
+    step: 0.1
+    initial_value: 16
+    update_interval: never
+    restore_value: true
+    optimistic: true
+    unit_of_measurement: µT
 select:
   - platform: template
     id: axis
@@ -164,7 +190,7 @@ sensor:
     on_value:
       then:
         - lambda: |-
-            // Detects rotation extrema by low-pass filtering the magnetometer signal
+            // Detects peaks and troughs by low-pass filtering the magnetometer signal
             // and monitoring slope sign changes. Each peak corresponds to one
             // half-rotation of the meters crank/shaft and is used to increment a counter.
             float value = x;
@@ -179,8 +205,19 @@ sensor:
             derivative = filtered_value - id(prev_filtered_value);
             id(prev_filtered_value) = filtered_value;
             
-            // Check for transition from Positive to Negative slope (hit a peak)
+            // Current slope sign
             bool is_slope_positive = derivative > 0.0;
+
+            // Did the slope sign change since last time
+            if (is_slope_positive != id(prev_is_slope_positive)) {
+              float delta = fabsf(value - id(half_rotation_marker));
+              if (delta < id(peak_trough_delta_threshold).state) {
+                // this slope change is too close to the previous peak/trough
+                // ignore it .. maybe this is just noise
+                return;  
+              }
+            }
+
             if (id(prev_is_slope_positive) && !is_slope_positive) {
               // This is a peak
               ESP_LOGI("counter", "Peak. value=%.2f f=%.2f d=%.2f", value, filtered_value, derivative);
@@ -196,7 +233,15 @@ sensor:
             }
             id(prev_is_slope_positive) = is_slope_positive;
     filters:
-      - delta: ${magnetic_field_change_threshold}
+      - lambda: |-
+          // filter out noise.  Equivalent to delta filter.
+          static float last = NAN;
+          float threshold = id(field_change_threshold).state;
+          if (isnan(last) || fabsf(x - last) >= threshold) {
+            last = x;
+            return x; // publish
+          }
+          return {}; // change too small.  suppress output
 
   # https://esphome.io/components/sensor/mmc5603/
   - platform: mmc5603
@@ -213,7 +258,15 @@ sensor:
           - lambda: |-
               if (id(axis).state == "x") id(axis_value).publish_state(x);
       filters:
-        - delta: ${magnetic_field_change_threshold}
+        - lambda: |-
+            // filter out noise.  Equivalent to delta filter.
+            static float last = NAN;
+            float threshold = id(field_change_threshold).state;
+            if (isnan(last) || fabsf(x - last) >= threshold) {
+              last = x;
+              return x; // publish
+            }
+            return {}; // change too small.  suppress output
     field_strength_y:
       id: magnetometer_axis_y
       name: Magnetic Field Strength Y
@@ -224,7 +277,15 @@ sensor:
           - lambda: |-
               if (id(axis).state == "y") id(axis_value).publish_state(x);
       filters:
-        - delta: ${magnetic_field_change_threshold}
+        - lambda: |-
+            // filter out noise.  Equivalent to delta filter.
+            static float last = NAN;
+            float threshold = id(field_change_threshold).state;
+            if (isnan(last) || fabsf(x - last) >= threshold) {
+              last = x;
+              return x; // publish
+            }
+            return {}; // change too small.  suppress output
     field_strength_z:
       id: magnetometer_axis_z
       name: Magnetic Field Strength Z
@@ -235,7 +296,15 @@ sensor:
           - lambda: |-
               if (id(axis).state == "z") id(axis_value).publish_state(x);
       filters:
-        - delta: ${magnetic_field_change_threshold}
+        - lambda: |-
+            // filter out noise.  Equivalent to delta filter.
+            static float last = NAN;
+            float threshold = id(field_change_threshold).state;
+            if (isnan(last) || fabsf(x - last) >= threshold) {
+              last = x;
+              return x; // publish
+            }
+            return {}; // change too small.  suppress output
     update_interval: ${magnetometer_update_interval_ms}ms
 
   - platform: template
@@ -261,8 +330,7 @@ sensor:
     unit_of_measurement: "µT"
     accuracy_decimals: 1
     filters:
-      - delta: ${magnetic_field_change_threshold}
-    
+      - delta: 1
 
   - platform: template
     id: sensor_total

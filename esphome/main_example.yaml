@@ -1,10 +1,28 @@
+# This is an example of the main YAML file you write.
+#
+# This is essentially a copy of my YAML file to read a PG&E gas meter.  It
+# is built for this hardware:
+#
+# M5Stack NanoC6: https://shop.m5stack.com/products/m5stack-nanoc6-dev-kit
+# MMC5603 Magnetometer: https://www.adafruit.com/product/5579
+#
+# These two components can be connected together with the:
+# Adafruit Grove to STEMMA QT Cable: https://www.adafruit.com/product/4528
 
+
+# How this works:
+#  - this links to other YAML files on GitHub.  Those files contain
+#    more configuration and snippets of C++ code.
+#  - anything in this file either adds-to or overwrites configuration in
+#    the linked GitHub files.
+
+# Anything here will override other substitutions in the linked files
 substitutions:
   # Name your device.  Use only lowercase and hyphens, which in HA, will be
   # converted to underscores.  See: https://esphome.io/components/esphome/
   device_name: gas-meter
 
-  # GPIO pins of the M5Stack NanoC6
+  # These are the GPIO pins of the M5Stack NanoC6
   i2c_scl: GPIO1
   i2c_sda: GPIO2
   gpio_led: GPIO7
@@ -16,18 +34,22 @@ substitutions:
   # enable_half_rotation_marker_sensor: 'false'
 
 
-# This pulls in all the configuration and code
+# This pulls in all the configuration and code from GitHub.
 packages:
   meter: !include
     file: ./includes/gas-meter.yaml
-    ref: main
+
+# TODO: finish this section
+# The default configuration works for an MMC5603 magnometer.  If you have a
+# different magnometer, you will need to do this:
+
 
 # Defines this device
 esphome:
   name: ${device_name}
   comment: Measures the gas meter
 
-# Defines the hardware
+# Defines the SoC.  This is the ESP32 in the M5Stack NanoC6
 esp32:
   variant: esp32c6
   flash_size: 4MB

@@ -1,0 +1,41 @@
+---
+
+# Include this file to override settings for the mmc5603 sensor to instead
+# support the qmc5883l magnetometer sensor
+
+logger:
+  logs:
+    qmc5883l: INFO
+
+sensor:
+  - id: !extend magnetometer_id
+    platform: qmc5883l
+    address: 0x0D
+    oversampling: 64x
+    temperature:
+      id: qmc5883l_temperature
+      name: Temperature
+      filters:
+        - lambda: "return x + id(temperature_offset).state;"
+        - sliding_window_moving_average:
+            window_size: 3000
+            send_every: 3000
+        - or:
+            - throttle: 300s
+            - delta: 0.5
+
+number:
+  - platform: template
+    id: temperature_offset
+    name: Temperature Offset
+    unit_of_measurement: '°C'
+    min_value: -100
+    max_value: 100
+    step: 0.1
+    mode: box
+    update_interval: never
+    optimistic: true
+    restore_value: true
+    initial_value: 33
+    icon: 'mdi:thermometer'
+    entity_category: config
