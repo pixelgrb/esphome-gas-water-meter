@@ -16,7 +16,6 @@ substitutions:
   # enable_half_rotation_marker_sensor: 'false'
 
 
-
 # This pulls in all the configuration and code
 packages:
   meter: !include
